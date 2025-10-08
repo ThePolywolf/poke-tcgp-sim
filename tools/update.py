@@ -1,4 +1,4 @@
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from objs.web_struct import SetHook
 from objs.data import PokemonCard, PokemonBuilder
@@ -12,8 +12,6 @@ def scrape_set_hooks(page, page_url) -> list[SetHook]:
     :param page_url: url of the webpage, used to build a complete reference for href links
     :return: All set hooks found | Raises exception if no hooks found
     """
-
-
     all_rows = page.find_all("tr")
     rows = [row for row in all_rows if sum([1 if td.find('a') is not None else 0 for td in row.find_all("td")]) == 3]
 
@@ -34,52 +32,89 @@ def scrape_set_hooks(page, page_url) -> list[SetHook]:
 
     return hooks
 
+def scrape_attack(html: Tag) -> tuple[str, str, str, str]:
+    info = html.find('p', {'class': 'card-text-attack-info'}).get_text().strip()
+    effect = html.find('p', {'class': 'card-text-attack-effect'}).get_text().strip()
+
+    info_splits = info.split(" ")
+    cost = info_splits[0].replace("\n", "")
+    damage = info_splits[-1]
+    name = " ".join([item for item in info_splits[1:-1] if item != ""])
+
+    cost = None if cost == '' else cost
+    effect = None if effect == '' else effect
+
+    return cost, name, damage, effect
+
 def scrape_pokemon(html: BeautifulSoup) -> PokemonCard:
     pk = PokemonBuilder()
 
-    card_html = html.find('div', attrs={'class': 'card-profile'})
+    card_profile = html.find('div', {'class': 'card-profile'})
 
-    img_div = card_html.find('div', attrs={'class': 'card-image'})
-    img = img_div.find('img')
-    pk.set_img_url(img.attrs['src'])
+    card_image = card_profile.find('img')['src']
+    pk.set_img_url(card_image)
 
-    card_name_span = card_html.find('span', attrs={'class': 'card-text-name'})
-    card_name = card_name_span.get_text()
+    header_text, attack_text, footer_text, illus_text, desc_text = card_profile.find_all('div', attrs={'class': 'card-text-section'})
+
+    # header: name, pk_type, hp, card_type, stage, pre_evo
+    card_name_text = header_text.find('span', {'class': 'card-text-name'})
+    card_name = card_name_text.find('a').get_text()
     pk.set_name(card_name)
+    type_hp_split = [item.strip() for item in card_name_text.next_sibling.strip().split("-") if item != ""]
+    pk_type, hp = type_hp_split
+    pk.set_pk_type(pk_type)
+    pk.set_hp(int(hp.split(" ")[0]))
 
-    # ex. " - Grass - 50 HP "
-    card_type, card_hp = [item.strip() for item in card_name_span.next_sibling.strip().split("-") if len(item) > 0]
-    pk.set_pk_type(card_type)
-    pk.set_hp(int(card_hp.split(" ")[0]))
+    card_type = header_text.find('p', {'class': 'card-text-type'})
+    card_type_splits = [item.strip() for item in card_type.get_text().split("-") if item != ""]
 
-    pk.set_stage(card_html.find('p', attrs={'class': 'card-text-type'}).get_text().split("-")[1].strip())
+    # card_type = card_type_splits[0]
+    stage = card_type_splits[1]
+    pk.set_stage(stage)
 
-    #TODO abilities and attacks
+    if stage.lower() != 'basic':
+        pk.set_pre_evolution(card_type_splits[2].split("\n")[1].strip())
 
-    card_wrr = card_html.find('p', attrs={'class': 'card-text-wrr'})
-    card_weak, card_retreat = [item.strip() for item in card_wrr.get_text().split("<br/>")[0].split("\n") if item != ""]
-    pk.set_weakness(card_weak.split(" ")[1])
-    pk.set_retreat(int(card_retreat.split(" ")[1]))
+    ability = attack_text.find('div', {'class': 'card-text-ability'})
+    if ability is not None:
+        pk.set_ability_name(ability.find('p', {'class': 'card-text-ability-info'}).get_text().replace("\n", "").strip()[9:].strip())
+        pk.set_ability_effect(ability.find('p', {'class': 'card-text-ability-effect'}).get_text().strip())
 
-    artist_div = card_html.find('div', attrs={'class': 'card-text-artist'})
-    pk.set_illustrator(artist_div.find('a').get_text().strip())
+    attacks = attack_text.find_all('div', {'class': 'card-text-attack'})
+    atk_number = 0
+    for attack in attacks:
+        atk_number += 1
+        if atk_number == 1:
+            pk.set_attack_1(*scrape_attack(attack))
+        elif atk_number == 2:
+            pk.set_attack_2(*scrape_attack(attack))
+        else:
+            raise Exception(f"Unable to process more than two attacks")
 
+    # footer: weakness, retreat
+    weakness_text, retreat_text = [item.strip() for item in footer_text.get_text().split("\n") if item != ""]
+    pk.set_weakness(weakness_text.split(" ")[1])
+    pk.set_retreat(int(retreat_text.split(" ")[1]))
+
+    # ex changes position of bottom text and illustrator
     is_ex = card_name[-2:].lower() == "ex"
     if is_ex:
-        print(card_html.find('span', attrs={'class': 'ptcg-symbol'}))
-        ex_rule = "ex" + card_html.find('span', attrs={'class': 'ptcg-symbol'}).next_sibling.next_sibling.strip().replace("\"", "")
-        pk.set_description(ex_rule)
-    else:
-        desc_div = card_html.find('div', attrs={'class': 'card-text-flavor'})
-        pk.set_description(desc_div.get_text().replace("\"", "").strip())
+        desc_text, illus_text = illus_text, desc_text
 
-    prints_html = html.find('div', attrs={'class': 'prints-current-details'})
-    pack_span, nr_span = prints_html.find_all('span')
+    # illustrator
+    illustrator = illus_text.find('a').get_text().strip()
+    pk.set_illustrator(illustrator)
 
-    pk.set_pack(pack_span.get_text().split("(")[-1].split(")")[0])
+    desc = desc_text.get_text().strip()
+    pk.set_description(desc)
 
-    nr_splits = nr_span.get_text().strip().split(" ")
-    number, rarity = nr_splits[0], nr_splits[2]
+    card_prints = html.find('div', {'class': 'card-prints'})
+
+    pack_text, nr_text = card_prints.find('div', {'class': 'prints-current-details'}).find_all('span')
+    pk.set_pack(pack_text.get_text().strip())
+    nr_text = nr_text.get_text().strip().split(" ")
+    nr_text.pop(1)
+    number, rarity = nr_text[0], nr_text[1]
     pk.set_number(int(number[1:]))
     pk.set_rarity(rarity)
 

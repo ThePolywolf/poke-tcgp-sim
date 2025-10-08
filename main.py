@@ -15,5 +15,7 @@ src_url = "https://pocket.limitlesstcg.com"
 # with open("data/pokemon.json", "w", encoding="utf-8") as f:
 #     json.dump(set_0_pkmn, f, ensure_ascii=False, indent=4)
 
-pokemon = update.scrape_pokemon(webhook.get_site_html("https://pocket.limitlesstcg.com/cards/A4b/5"))
-print(pokemon)
+for i in ['A4/15', 'A4b/5', 'A4/21']:
+    pokemon = update.scrape_pokemon(webhook.get_site_html(f"https://pocket.limitlesstcg.com/cards/{i}"))
+    print(pokemon)
+    print()
